@@ -3,17 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import ChatMessage from "./ChatMessage";
-import { Message, WSClientMessage, WSServerMessage } from "@/lib/types";
+import { Message } from "@/lib/types";
 
 export default function DebateView() {
   const [roomId, setRoomId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [userInput, setUserInput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -37,95 +37,130 @@ export default function DebateView() {
     }
   }, []);
 
-  // WebSocket connection management
+  // Fetch history when room ID is set
   useEffect(() => {
     if (!roomId) return;
 
-    // Determine WebSocket protocol based on current location
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/api/debate/socket`;
-
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log("WebSocket connected");
-      setIsConnected(true);
-      setError(null);
-      // Send init message
-      const initMessage: WSClientMessage = { type: "init", roomId };
-      ws.send(JSON.stringify(initMessage));
-    };
-
-    ws.onmessage = (event) => {
+    const fetchHistory = async () => {
       try {
-        const data: WSServerMessage = JSON.parse(event.data);
-
-        switch (data.type) {
-          case "history":
-            setMessages(data.messages);
-            break;
-          case "new_messages":
-            setMessages((prev) => [...prev, ...data.messages]);
-            break;
-          case "status":
-            setIsRunning(data.isRunning);
-            break;
-          case "error":
-            setError(data.message);
-            console.error("WebSocket error:", data.message);
-            break;
+        const response = await fetch(`/api/debate/history?room_id=${roomId}`);
+        if (response.ok) {
+          const data = await response.json();
+          setMessages(data.messages || []);
         }
       } catch (err) {
-        console.error("Failed to parse WebSocket message:", err);
+        console.error("Failed to fetch history:", err);
       }
     };
 
-    ws.onerror = (event) => {
-      console.error("WebSocket error:", event);
-      setError("Connection error occurred");
-      setIsConnected(false);
-    };
-
-    ws.onclose = () => {
-      console.log("WebSocket disconnected");
-      setIsConnected(false);
-    };
-
-    return () => {
-      ws.close();
-    };
+    fetchHistory();
   }, [roomId]);
 
-  const sendWSMessage = (message: WSClientMessage) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(message));
-    } else {
-      setError("WebSocket not connected");
+  // Polling logic for automatic debate rounds
+  useEffect(() => {
+    if (!isRunning || !roomId) {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      return;
     }
-  };
 
-  const handleUserSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userInput.trim()) return;
+    // Start polling
+    const runDebateStep = async () => {
+      if (isLoading) return; // Prevent overlapping requests
 
-    const message: WSClientMessage = {
-      type: "user_prompt",
-      roomId,
-      content: userInput.trim(),
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        const response = await fetch("/api/debate/step", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            room_id: roomId,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.newMessages && data.newMessages.length > 0) {
+            setMessages((prev) => [...prev, ...data.newMessages]);
+          }
+        } else {
+          const errorText = await response.text();
+          setError(`API error: ${errorText}`);
+        }
+      } catch (err) {
+        console.error("Debate step error:", err);
+        setError("Failed to generate debate step");
+      } finally {
+        setIsLoading(false);
+      }
     };
+
+    // Run initial step immediately
+    runDebateStep();
+
+    // Then set up polling interval
+    pollingIntervalRef.current = setInterval(runDebateStep, 4000); // 4 seconds between rounds
+
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, [isRunning, roomId, isLoading]);
+
+  const handleUserSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userInput.trim() || isLoading) return;
+
+    const userPrompt = userInput.trim();
 
     // Optimistically add user message to UI
     const userMessage: Message = {
       id: uuidv4(),
       author: "user",
-      content: userInput.trim(),
+      content: userPrompt,
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMessage]);
-
-    sendWSMessage(message);
     setUserInput("");
+
+    // Trigger debate step with user prompt
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const response = await fetch("/api/debate/step", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          room_id: roomId,
+          user_prompt: userPrompt,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.newMessages && data.newMessages.length > 0) {
+          setMessages((prev) => [...prev, ...data.newMessages]);
+        }
+      } else {
+        const errorText = await response.text();
+        setError(`API error: ${errorText}`);
+      }
+    } catch (err) {
+      console.error("User prompt error:", err);
+      setError("Failed to process your prompt");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleNewRoom = () => {
@@ -134,14 +169,15 @@ export default function DebateView() {
     setRoomId(newRoomId);
     setMessages([]);
     setIsRunning(false);
+    setError(null);
   };
 
   const handlePause = () => {
-    sendWSMessage({ type: "pause", roomId });
+    setIsRunning(false);
   };
 
   const handleResume = () => {
-    sendWSMessage({ type: "resume", roomId });
+    setIsRunning(true);
   };
 
   return (
@@ -174,14 +210,14 @@ export default function DebateView() {
               onChange={(e) => setUserInput(e.target.value)}
               placeholder="Guide the argument... (e.g., 'Debate tabs vs spaces')"
               className="flex-1 bg-gray-800 text-white border border-gray-600 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              disabled={!isConnected}
+              disabled={isLoading}
             />
             <button
               type="submit"
-              disabled={!isConnected || !userInput.trim()}
+              disabled={isLoading || !userInput.trim()}
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors"
             >
-              Send
+              {isLoading ? "..." : "Send"}
             </button>
           </form>
         </div>
@@ -194,14 +230,8 @@ export default function DebateView() {
           <h3 className="text-lg font-bold text-white mb-4">Status</h3>
           <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <div
-                className={`w-3 h-3 rounded-full ${
-                  isConnected ? "bg-green-500" : "bg-red-500"
-                }`}
-              />
-              <span className="text-sm text-gray-300">
-                {isConnected ? "Connected" : "Disconnected"}
-              </span>
+              <div className={`w-3 h-3 rounded-full bg-green-500`} />
+              <span className="text-sm text-gray-300">Ready</span>
             </div>
             <div className="flex items-center gap-2">
               <div
@@ -226,7 +256,7 @@ export default function DebateView() {
             {!isRunning ? (
               <button
                 onClick={handleResume}
-                disabled={!isConnected}
+                disabled={isLoading}
                 className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-2 px-4 rounded-lg font-medium transition-colors"
               >
                 Resume argument
@@ -234,8 +264,7 @@ export default function DebateView() {
             ) : (
               <button
                 onClick={handlePause}
-                disabled={!isConnected}
-                className="w-full bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-2 px-4 rounded-lg font-medium transition-colors"
+                className="w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-4 rounded-lg font-medium transition-colors"
               >
                 Pause argument
               </button>

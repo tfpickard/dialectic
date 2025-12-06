@@ -30,16 +30,3 @@ export interface DebateHistoryResponse {
   messages: Message[];
   room_id: string;
 }
-
-// WebSocket message types
-export type WSClientMessage =
-  | { type: "init"; roomId: string }
-  | { type: "user_prompt"; roomId: string; content: string }
-  | { type: "pause"; roomId: string }
-  | { type: "resume"; roomId: string };
-
-export type WSServerMessage =
-  | { type: "history"; messages: Message[] }
-  | { type: "new_messages"; messages: Message[] }
-  | { type: "error"; message: string }
-  | { type: "status"; isRunning: boolean };
