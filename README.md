@@ -17,14 +17,14 @@ These agents are programmed to disagree on everything. When they reach a stalema
 - 🎯 **User guidance**: Inject prompts to steer the debate in new directions
 - 🔄 **Stalemate detection**: Automatically pivots to new topics when arguments loop
 - 💾 **Room persistence**: Debate history is saved and can be resumed later
-- ⚡ **Real-time updates**: WebSocket connection for instant message delivery
+- ⚡ **Live updates**: HTTP polling for smooth, real-time debate flow
 - 🎨 **Clean UI**: Dark-themed interface built with Tailwind CSS
 
 ## Tech Stack
 
 - **Frontend**: Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS
 - **Backend**: Vercel Python Functions with OpenAI API
-- **Real-time**: WebSocket for live updates
+- **Real-time**: HTTP polling (serverless-compatible)
 - **Database**: SQLite (stored in `/tmp` for serverless compatibility)
 
 ## Prerequisites
@@ -132,18 +132,17 @@ In your Vercel project settings:
 ```
 dialectic/
 ├── app/
-│   ├── api/
-│   │   └── debate/
-│   │       └── socket/
-│   │           └── route.ts       # WebSocket handler
 │   ├── layout.tsx                 # Root layout
 │   ├── page.tsx                   # Main page
 │   └── globals.css                # Global styles
 ├── api/
-│   └── debate.py                  # Python backend (Vercel Function)
+│   └── debate/
+│       ├── _shared.py             # Shared utilities and prompts
+│       ├── history.py             # GET /api/debate/history
+│       └── step.py                # POST /api/debate/step
 ├── components/
 │   ├── ChatMessage.tsx            # Message bubble component
-│   └── DebateView.tsx             # Main debate interface
+│   └── DebateView.tsx             # Main debate interface (HTTP polling)
 ├── lib/
 │   └── types.ts                   # TypeScript type definitions
 ├── package.json
@@ -202,27 +201,11 @@ Generate a new debate turn (Alpha and Beta both reply).
 }
 ```
 
-### WebSocket `/api/debate/socket`
-
-Real-time WebSocket connection for live updates.
-
-**Client messages:**
-- `{ "type": "init", "roomId": "string" }` - Initialize connection
-- `{ "type": "user_prompt", "roomId": "string", "content": "string" }` - Send user prompt
-- `{ "type": "pause", "roomId": "string" }` - Pause automatic debate
-- `{ "type": "resume", "roomId": "string" }` - Resume automatic debate
-
-**Server messages:**
-- `{ "type": "history", "messages": [...] }` - Full message history
-- `{ "type": "new_messages", "messages": [...] }` - New messages from debate turn
-- `{ "type": "status", "isRunning": boolean }` - Debate running status
-- `{ "type": "error", "message": "string" }` - Error message
-
 ## Configuration
 
 ### Agent Personalities
 
-The agent system prompts are defined in `api/debate.py`:
+The agent system prompts are defined in `api/debate/_shared.py`:
 
 - `ALPHA_SYSTEM_PROMPT`: Logical, pedantic contrarian
 - `BETA_SYSTEM_PROMPT`: Emotional, rhetorical opponent
@@ -231,19 +214,19 @@ You can modify these to change the agents' personalities and debate styles.
 
 ### Debate Parameters
 
-In `api/debate.py`, you can adjust:
+In `api/debate/_shared.py`, you can adjust:
 
 - `max_messages`: Number of recent messages to include in context (default: 20)
 - Model: Currently using `gpt-4-turbo-preview`, can be changed to other OpenAI models
 - Temperature: Set to 0.9 for creative, varied responses
 - Max tokens: 500 per response
 
-### WebSocket Timing
+### Polling Interval
 
-In `app/api/debate/socket/route.ts`:
+In `components/DebateView.tsx`:
 
-- Debate round interval: 3000ms (3 seconds) between automatic rounds
-- Adjust the `setInterval` delay to speed up or slow down debates
+- Debate round interval: 4000ms (4 seconds) between automatic rounds
+- Adjust the `setInterval` delay in the polling logic to speed up or slow down debates
 
 ## Content Safety
 
@@ -260,11 +243,12 @@ The tone is "combative but not hateful" - think heated academic debate or politi
 
 ## Troubleshooting
 
-### WebSocket not connecting
+### API connection issues
 
-- Check browser console for errors
-- Verify the WebSocket URL is correct (ws:// for local, wss:// for production)
+- Check browser console for errors and network tab for failed requests
+- Verify the API endpoints are accessible (check /api/debate/history and /api/debate/step)
 - In local development, ensure Next.js dev server is running
+- Check that CORS headers are being sent correctly
 
 ### Python API errors
 
