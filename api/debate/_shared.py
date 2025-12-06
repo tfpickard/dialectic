@@ -4,10 +4,7 @@ import sqlite3
 import time
 from typing import Dict, List, Optional
 import os
-import openai
-
-# Initialize OpenAI client
-openai.api_key = os.environ.get("OPENAI_API_KEY", "")
+from openai import OpenAI
 
 # Database path (using /tmp for serverless compatibility)
 DB_PATH = "/tmp/dialectic.db"
@@ -222,7 +219,9 @@ def generate_agent_reply(agent: str, room_id: str, messages: List[Dict], user_pr
 
     # Call OpenAI API
     try:
-        client = openai.OpenAI(api_key=openai.api_key)
+        # Initialize OpenAI client with API key from environment
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
         response = client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
@@ -237,5 +236,7 @@ def generate_agent_reply(agent: str, room_id: str, messages: List[Dict], user_pr
 
     except Exception as e:
         print(f"OpenAI API error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         # Return a fallback message
         return f"[Error generating response: {str(e)}]"
