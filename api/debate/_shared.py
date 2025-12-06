@@ -220,7 +220,17 @@ def generate_agent_reply(agent: str, room_id: str, messages: List[Dict], user_pr
     # Call OpenAI API
     try:
         # Initialize OpenAI client with API key from environment
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        # Note: Explicitly avoiding proxy configuration to prevent Vercel environment conflicts
+        api_key = os.environ.get("OPENAI_API_KEY")
+
+        if not api_key:
+            return "[Error: OPENAI_API_KEY not set in environment variables]"
+
+        client = OpenAI(
+            api_key=api_key,
+            timeout=30.0,  # 30 second timeout
+            max_retries=2
+        )
 
         response = client.chat.completions.create(
             model="gpt-4-turbo-preview",
